@@ -1,0 +1,11 @@
+{
+  "language": "typescript",
+  "app": "npx ts-node main.ts",
+  "projectId": "f740e886-f009-4360-a695-79304440e754",
+  "sendCrashReports": "false",
+  "context": {
+    "excludeStackIdFromLogicalIds": "true",
+    "allowSepCharsInLogicalIds": "true"
+  },
+  "terraformProviders": ["vercel/vercel@~> 0.7"]
+}

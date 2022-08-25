@@ -1,0 +1,6 @@
+packages:
+  - 'backend/services/*'
+  - 'bff/services/*'
+  - 'frontend/*'
+  - 'infrastructure/*'
+  - 'packages/js/*'

@@ -1,0 +1,8 @@
+{
+  "name": "csv-to-pdf-microservices-app",
+  "private": true,
+  "scripts": {
+    "postinstall": "poetry install",
+    "dev": "poetry run start"
+  }
+}
