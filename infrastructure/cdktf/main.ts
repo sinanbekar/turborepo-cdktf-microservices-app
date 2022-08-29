@@ -1,9 +1,9 @@
 import { Construct } from "constructs";
 import {
   App,
+  Fn,
   TerraformOutput,
   TerraformStack,
-  // Fn
 } from "cdktf";
 import * as path from "path";
 import * as vercel from "./.gen/providers/vercel";
@@ -226,61 +226,52 @@ class BackendStack extends TerraformStack {
     );
 
     this.apiGw = new aws.apigateway.ApiGatewayRestApi(this, "ApiGw", {
-      name: name,
+      name: `${name}-rest-api`,
       endpointConfiguration: {
         types: ["REGIONAL"],
       },
-      binaryMediaTypes: ["*/*"],
+      body: JSON.stringify({
+        openapi: "3.0.1",
+        info: {
+          title: `${name}-rest-api`,
+          version: "1.0",
+        },
+        paths: {
+          "/{proxy+}": {
+            "x-amazon-apigateway-any-method": {
+              parameters: [
+                {
+                  name: "proxy",
+                  in: "path",
+                  required: true,
+                  schema: {
+                    type: "string",
+                  },
+                },
+              ],
+              "x-amazon-apigateway-integration": {
+                uri: `arn:aws:apigateway:${region}:lambda:path/2015-03-31/functions/${bffLambdaFunction.arn}/invocations`,
+                httpMethod: "POST",
+                type: "aws_proxy",
+              },
+            },
+          },
+        },
+        "x-amazon-apigateway-binary-media-types": ["*/*"],
+      }),
     });
-
-    const apiGwProxy = new aws.apigateway.ApiGatewayResource(
-      this,
-      "ApiGwProxy",
-      {
-        restApiId: this.apiGw.id,
-        parentId: this.apiGw.rootResourceId,
-        pathPart: "{proxy+}",
-      }
-    );
-
-    const apiGwProxyMethod = new aws.apigateway.ApiGatewayMethod(
-      this,
-      "ApiGwProxyMethod",
-      {
-        restApiId: this.apiGw.id,
-        resourceId: apiGwProxy.id,
-        authorization: "NONE",
-        httpMethod: "ANY",
-      }
-    );
-
-    const proxyIntegration = new aws.apigateway.ApiGatewayIntegration(
-      this,
-      "ApiGwProxyIntegration",
-      {
-        httpMethod: apiGwProxyMethod.httpMethod,
-        resourceId: apiGwProxyMethod.resourceId,
-        restApiId: this.apiGw.id,
-        type: "AWS_PROXY",
-        integrationHttpMethod: "POST",
-        uri: bffLambdaFunction.invokeArn,
-      }
-    );
 
     const apiGwDeployment = new aws.apigateway.ApiGatewayDeployment(
       this,
       "ApiGwDeployment",
       {
         restApiId: this.apiGw.id,
-        dependsOn: [proxyIntegration],
-        // TODO: implement
         // https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/api_gateway_deployment#example-usage
         // https://github.com/hashicorp/terraform/issues/6613
         // https://github.com/hashicorp/terraform-provider-aws/issues/162
-        //triggers: {
-        //  redeployment: ""
-        //},
-        //
+        triggers: {
+          redeployment: Fn.sha1(Fn.jsonencode(this.apiGw.body)),
+        },
         lifecycle: {
           createBeforeDestroy: true,
         },
