@@ -2,105 +2,120 @@
 // and get bundled dir to archive as a zip file
 
 import { Construct } from "constructs";
-import { Stack, App/*, cx_api as cxapi*/ } from "aws-cdk-lib";
-import {
-  AssetStaging,
-  aws_lambda as lambda,
-  aws_lambda_nodejs as lambdaNodejs,
-} from "aws-cdk-lib";
 import * as path from "path";
-import * as fs from "fs";
 import * as os from "os";
+import * as fs from "fs";
 import { TerraformAsset, AssetType } from "cdktf";
-import { PythonFunction } from "@aws-cdk/aws-lambda-python-alpha";
+import * as aws from "@cdktf/provider-aws";
+import { Stack, App, cx_api as cxapi } from "aws-cdk-lib";
+import type { Asset } from "aws-cdk-lib/aws-s3-assets";
+import type {
+  PythonFunction as LambdaPythonFunction,
+  PythonLayerVersion as LambdaPythonLayerVersion,
+} from "@aws-cdk/aws-lambda-python-alpha";
+import type { NodejsFunction as LambdaNodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
+import type {
+  Function as LambdaFunction,
+  LayerVersion as LambdaLayerVersion,
+} from "aws-cdk-lib/aws-lambda";
 
 let dummyStack: Stack;
+const defaultOutdir = path.join(os.tmpdir(), "cdktf-lambda-asset");
 
-function getDummyStack({ outdir }: { outdir?: string }) {
+export function getDummyStack() {
+  if (!fs.existsSync(defaultOutdir)) {
+    fs.mkdirSync(defaultOutdir);
+  }
   dummyStack =
     dummyStack ??
     new Stack(
       new App({
         autoSynth: false,
-        outdir: outdir,
-        //context: {
-        //  [cxapi.NEW_STYLE_STACK_SYNTHESIS_CONTEXT]: false,
-        //},
+        outdir: defaultOutdir,
+        context: {
+          [cxapi.NEW_STYLE_STACK_SYNTHESIS_CONTEXT]: false,
+          [cxapi.ASSET_RESOURCE_METADATA_ENABLED_CONTEXT]: false,
+        },
       })
     );
 
   return dummyStack;
 }
 
-type AssetFunctionType =
-  | typeof lambda.Function
-  | typeof lambdaNodejs.NodejsFunction
-  | typeof PythonFunction
-  | typeof lambda.LayerVersion;
+type BaseAdapterLambdaFunctionType =
+  | LambdaFunction
+  | LambdaNodejsFunction
+  | LambdaPythonFunction;
 
-function initCatcher<T extends AssetFunctionType>(
-  type: T,
-  props: ConstructorParameters<T>[2]
-) {
-  const outdir = path.join(os.tmpdir(), "cdktf-lambda-asset");
-  if (!fs.existsSync(outdir)) {
-    fs.mkdirSync(outdir);
+type BaseAdapterLambdaLayerVersion =
+  | LambdaPythonLayerVersion
+  | LambdaLayerVersion;
+
+export class BaseAdapterFunction extends aws.lambdafunction.LambdaFunction {
+  constructor(
+    scope: Construct,
+    id: string,
+    config: aws.lambdafunction.LambdaFunctionConfig,
+    func: BaseAdapterLambdaFunctionType
+  ) {
+    const { assetPath: assetPathdir, assetHash } = func.node.tryFindChild(
+      "Code"
+    ) as Asset;
+    const assetPath = new TerraformAsset(scope, `${id}Archive`, {
+      assetHash,
+      path: path.join(defaultOutdir, assetPathdir),
+      type: AssetType.ARCHIVE,
+    }).path;
+
+    const s3Object = config.s3Bucket
+      ? new aws.s3.S3Object(scope, `${id}S3`, {
+          bucket: config.s3Bucket,
+          key: config.s3Key ?? `asset-${assetHash}`,
+          source: assetPath,
+        })
+      : undefined;
+
+    super(scope, id, {
+      ...config,
+      s3Bucket: s3Object?.bucket,
+      s3Key: s3Object?.key,
+      filename: !s3Object?.key ? assetPath : undefined,
+      handler: config.handler ?? "index.handler",
+      runtime: config.runtime,
+    });
   }
-  const dummyStack = getDummyStack({
-    outdir,
-  });
-  let assetCodeProps!: lambda.AssetCode;
-
-  if ("code" in props) {
-    assetCodeProps = props.code as lambda.AssetCode;
-  } else {
-    class Catcher {
-      constructor(
-        _scope: Construct,
-        _id: string,
-        props: unknown & { code: lambda.AssetCode }
-      ) {
-        assetCodeProps = props.code;
-      }
-      addEnvironment() {}
-    }
-
-    Object.setPrototypeOf(type.prototype, Catcher.prototype);
-    Object.setPrototypeOf(type, Catcher);
-
-    //@ts-ignore
-    new type(dummyStack, "dummy", props);
-  }
-
-  return { assetCodeProps, dummyStack };
 }
 
-function generateLambdaAsset<T extends AssetFunctionType>(
-  scope: Construct,
-  id: string,
-  type: T,
-  props: ConstructorParameters<T>[2]
-) {
-  const { assetCodeProps, dummyStack } = initCatcher(type, props);
-  // eslint-disable-next-line turbo/no-undeclared-env-vars
-  process.env.npm_config_strict_peer_dependencies = "false";
-  // stage the asset source (conditionally).
-  const staging = new AssetStaging(dummyStack, `${id}DummyAssetStage`, {
-    ...assetCodeProps["options"], // accessing private
-    sourcePath: assetCodeProps.path,
-    //follow: assetProps.followSymlinks ?? toSymlinkFollow(assetProps.follow), // TODO
-  });
+export class BaseAdapterLayerVersion extends aws.lambdafunction
+  .LambdaLayerVersion {
+  constructor(
+    scope: Construct,
+    id: string,
+    config: aws.lambdafunction.LambdaLayerVersionConfig,
+    layer: BaseAdapterLambdaLayerVersion
+  ) {
+    const { assetPath: assetPathdir, assetHash } = layer.node.tryFindChild(
+      "Code"
+    ) as Asset;
+    const assetPath = new TerraformAsset(scope, `${id}Archive`, {
+      assetHash,
+      path: path.join(defaultOutdir, assetPathdir),
+      type: AssetType.ARCHIVE,
+    }).path;
 
-  return new TerraformAsset(scope, id, {
-    // assetHash: staging.assetHash,
-    path: staging.absoluteStagedPath,
-    type: AssetType.ARCHIVE,
-  });
-}
+    const s3Object = config.s3Bucket
+      ? new aws.s3.S3Object(scope, `${id}Archive`, {
+          bucket: config.s3Bucket,
+          key: config.s3Key ?? `asset-${assetHash}`,
+          source: assetPath,
+        })
+      : undefined;
 
-export function generateLambdaAssetForTerraform(
-  ...paramaters: Parameters<typeof generateLambdaAsset>
-) {
-  const asset = generateLambdaAsset(...paramaters);
-  return { filename: asset.path, sourceCodeHash: asset.assetHash, asset };
+    super(scope, id, {
+      ...config,
+      s3Bucket: s3Object?.bucket,
+      s3Key: s3Object?.key,
+      filename: !s3Object?.key ? assetPath : undefined,
+    });
+  }
 }

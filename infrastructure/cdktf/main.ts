@@ -13,10 +13,8 @@ import * as random from "@cdktf/provider-random";
 import {
   NodejsFunction,
   PythonPoetryFunction,
-  Runtime,
   NodejsFunctionProps,
   PythonPoetryFunctionProps,
-  PythonPoetryFunctionAssetProps,
 } from "./lib/lambda/function";
 import {
   nestEsBuildExternals,
@@ -156,21 +154,17 @@ class BackendStack extends TerraformStack {
     });
 
     const bffLambdaFunction = new NodejsFunction(this, "BffLambdaFunction", {
-      functionName: "bff-lambda",
-      runtime: config.bff.function.runtime ?? Runtime.NODEJS_16_X.name,
-      handler: config.bff.function.handler ?? "index.handler",
-      assetProps: {
-        ...config.bff.function.assetProps,
-        bundling: {
-          minify: true,
-          externalModules: ["aws-sdk", ...nestEsBuildExternals],
-          nodeModules: nestEsBuildNodeModules,
-          //forceDockerBundling: true, // enable if you add native module(s)
-          // make sure that run build before deploy
-          // see https://github.com/aws/aws-cdk/issues/19841
-          //preCompilation: true,
-          ...config.bff.function.assetProps?.bundling,
-        },
+      functionName: `bff-lambda-${pet.id}`,
+      entry: config.bff.function.entry,
+      bundling: {
+        minify: true,
+        externalModules: ["aws-sdk", ...nestEsBuildExternals],
+        nodeModules: nestEsBuildNodeModules,
+        //forceDockerBundling: true, // enable if you add native module(s)
+        // make sure that run build before deploy
+        // see https://github.com/aws/aws-cdk/issues/19841
+        //preCompilation: true,
+        ...config.bff.function.bundling,
       },
       environment: {
         variables: {
@@ -183,17 +177,15 @@ class BackendStack extends TerraformStack {
       memorySize: 128,
       timeout: 30,
       role: role.arn,
+      ...config.bff.function,
     });
 
     const backendLambdaFunction = new PythonPoetryFunction(
       this,
       "BackendLambdaFunction",
       {
-        functionName: "backend-lambda",
-        runtime: config.python.function.runtime ?? Runtime.PYTHON_3_8.name,
-        handler: config.python.function.handler ?? "lambda.lambda_handler",
-        assetProps: config.python.function
-          .assetProps as PythonPoetryFunctionAssetProps,
+        functionName: `backend-lambda-${pet.id}`,
+        entry: config.python.function.entry as string,
         memorySize: 256,
         timeout: 30,
         s3Bucket: new aws.s3.S3Bucket(this, "BackendLambdaBucket", {
@@ -210,6 +202,7 @@ class BackendStack extends TerraformStack {
         },
 
         role: role.arn,
+        ...config.python.function,
       }
     );
 
@@ -362,32 +355,28 @@ const backend = new BackendStack(app, "backend", {
   queueName: "csv2pdf",
   bff: {
     function: {
-      assetProps: {
-        entry: path.join(
-          __dirname,
-          "..",
-          "..",
-          "bff",
-          "services",
-          "aggregation",
-          "dist", // make sure that run build before deploy see #L170
-          "lambda.js"
-        ),
-      },
+      entry: path.join(
+        __dirname,
+        "..",
+        "..",
+        "bff",
+        "services",
+        "aggregation",
+        "dist", // make sure that run build before deploy see #L170
+        "lambda.js"
+      ),
     },
   },
   python: {
     function: {
-      assetProps: {
-        entry: path.join(
-          __dirname,
-          "..",
-          "..",
-          "backend",
-          "services",
-          "csv-to-pdf-microservice"
-        ),
-      },
+      entry: path.join(
+        __dirname,
+        "..",
+        "..",
+        "backend",
+        "services",
+        "csv-to-pdf-microservice"
+      ),
       handler: "lambda.lambda_handler", // lambda.py:lambda_handler
     },
   },

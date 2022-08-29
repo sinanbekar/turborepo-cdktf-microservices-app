@@ -1,136 +1,134 @@
 import * as aws from "@cdktf/provider-aws";
 import { Construct } from "constructs";
 import {
-  aws_lambda as lambda,
-  aws_lambda_nodejs as lambdaNodejs,
-} from "aws-cdk-lib";
-import { generateLambdaAssetForTerraform } from "./asset-util";
+  NodejsFunction as LambdaNodejsFunction,
+  NodejsFunctionProps as LambdaNodejsFunctionProps,
+  LogLevel as LambdaNodejsLogLevel,
+} from "aws-cdk-lib/aws-lambda-nodejs";
+import {
+  Function as LambdaFunction,
+  FunctionProps as LambdaFunctionProps,
+  LayerVersion as LambdaLayerVersion,
+  LayerVersionProps as LambdaLayerVersionProps,
+  Runtime,
+  RuntimeFamily,
+  Code,
+} from "aws-cdk-lib/aws-lambda";
+import {
+  BaseAdapterFunction,
+  BaseAdapterLayerVersion,
+  getDummyStack,
+} from "./asset-util";
 import {
   PythonFunction as LambdaPythonFunction,
   PythonFunctionProps as LambdaPythonFunctionProps,
+  PythonLayerVersion as LambdaPythonLayerVersion,
+  PythonLayerVersionProps as LambdaPythonLayerVersionProps,
 } from "@aws-cdk/aws-lambda-python-alpha";
 
-export type NodejsFunctionAssetProps =
-  Partial<lambdaNodejs.NodejsFunctionProps>;
-export type PythonFunctionAssetProps = Partial<LambdaPythonFunctionProps>;
-export type PythonPoetryFunctionAssetProps = Partial<lambda.FunctionProps> & {
-  entry: string;
+export type NodejsFunctionProps = aws.lambdafunction.LambdaFunctionConfig & {
+  bundling: LambdaNodejsFunctionProps["bundling"];
+  entry: LambdaNodejsFunctionProps["entry"];
 };
 
-export type NodejsFunctionProps = aws.lambdafunction.LambdaFunctionConfig & {
-  assetProps: NodejsFunctionAssetProps;
-};
 export type PythonFunctionProps = aws.lambdafunction.LambdaFunctionConfig & {
-  assetProps: PythonFunctionAssetProps;
+  bundling: LambdaPythonFunctionProps["bundling"];
+  entry: LambdaPythonFunctionProps["entry"];
 };
+
 export type PythonPoetryFunctionProps =
   aws.lambdafunction.LambdaFunctionConfig & {
-    assetProps: PythonPoetryFunctionAssetProps;
+    entry: string;
   };
 
-export class NodejsFunction extends aws.lambdafunction.LambdaFunction {
+export type FunctionProps = aws.lambdafunction.LambdaFunctionConfig & {
+  code: LambdaFunctionProps["code"];
+};
+
+export class Function extends BaseAdapterFunction {
+  constructor(scope: Construct, id: string, config: FunctionProps) {
+    const handler = config.handler ?? "index.handler";
+    const runtime = new Runtime(config.runtime as string);
+
+    super(
+      scope,
+      id,
+      config,
+      new LambdaFunction(getDummyStack(), id, {
+        code: config.code,
+        handler: handler,
+        runtime: runtime,
+      })
+    );
+  }
+}
+
+export class NodejsFunction extends BaseAdapterFunction {
   constructor(scope: Construct, id: string, config: NodejsFunctionProps) {
-    const handler =
-      config.handler ?? config.assetProps.handler ?? "index.handler";
+    const handler = config.handler ?? "index.handler";
     const runtime = config.runtime
-      ? new lambda.Runtime(config.runtime, lambda.RuntimeFamily.NODEJS)
-      : config.assetProps.runtime ?? lambda.Runtime.NODEJS_16_X;
+      ? new Runtime(config.runtime, RuntimeFamily.NODEJS)
+      : Runtime.NODEJS_16_X;
 
-    const assetData = generateLambdaAssetForTerraform(
+    super(
       scope,
-      `${id}Asset`,
-      lambdaNodejs.NodejsFunction,
-      {
-        ...config.assetProps,
+      id,
+      { ...config, handler, runtime: runtime.name },
+      new LambdaNodejsFunction(getDummyStack(), id, {
+        entry: config.entry,
         bundling: {
-          ...config.assetProps.bundling,
-          logLevel: lambdaNodejs.LogLevel.ERROR,
+          logLevel: LambdaNodejsLogLevel.ERROR, // hide unnecessarry logs, overrideable
+          ...config.bundling,
+          externalModules: [
+            "aws-sdk",
+            ...(config.bundling?.externalModules ?? []),
+          ],
         },
-        handler,
+        handler: handler.replace("index.", ""), // nodejsfunction adds `index.`
         runtime,
-      }
+      })
     );
-
-    const s3Object = config.s3Bucket
-      ? new aws.s3.S3Object(scope, `${id}Archive`, {
-          bucket: config.s3Bucket,
-          key: `${
-            assetData.asset.assetHash
-          }-${assetData.asset.fileName.toLowerCase()}`,
-          source: assetData.asset.path, // returns a posix path
-        })
-      : undefined;
-
-    super(scope, id, {
-      ...config,
-      s3Bucket: s3Object?.bucket,
-      s3Key: s3Object?.key,
-      filename: !s3Object?.key ? assetData.filename : undefined,
-      sourceCodeHash: assetData.sourceCodeHash,
-      handler,
-      runtime: runtime.name,
-    });
   }
 }
 
-export class PythonFunction extends aws.lambdafunction.LambdaFunction {
+export class PythonFunction extends BaseAdapterFunction {
   constructor(scope: Construct, id: string, config: PythonFunctionProps) {
-    const handler =
-      config.handler ?? config.assetProps.handler ?? "index.handler";
+    const handler = config.handler ?? "index.handler";
     const runtime = config.runtime
-      ? new lambda.Runtime(config.runtime, lambda.RuntimeFamily.PYTHON)
-      : config.assetProps.runtime ?? lambda.Runtime.PYTHON_3_8;
+      ? new Runtime(config.runtime, RuntimeFamily.PYTHON)
+      : Runtime.PYTHON_3_8;
 
-    const assetData = generateLambdaAssetForTerraform(
+    super(
       scope,
-      `${id}Asset`,
-      LambdaPythonFunction,
-      {
-        ...config.assetProps,
+      id,
+      { ...config, handler },
+      new LambdaPythonFunction(getDummyStack(), id, {
+        bundling: config.bundling,
+        entry: config.entry,
         handler,
         runtime,
-      }
+      })
     );
-
-    const s3Object = config.s3Bucket
-      ? new aws.s3.S3Object(scope, `${id}Archive`, {
-          bucket: config.s3Bucket,
-          key: `${
-            assetData.asset.assetHash
-          }-${assetData.asset.fileName.toLowerCase()}`,
-          source: assetData.asset.path, // returns a posix path
-        })
-      : undefined;
-
-    super(scope, id, {
-      ...config,
-      s3Bucket: s3Object?.bucket,
-      s3Key: s3Object?.key,
-      filename: !s3Object?.key ? assetData.filename : undefined,
-      sourceCodeHash: assetData.sourceCodeHash,
-      handler,
-      runtime: runtime.name,
-    });
   }
 }
 
-export class PythonPoetryFunction extends aws.lambdafunction.LambdaFunction {
+// TODO
+// hotfix https://github.com/aws/aws-cdk/issues/19232
+export class PythonPoetryFunction extends BaseAdapterFunction {
   constructor(scope: Construct, id: string, config: PythonPoetryFunctionProps) {
-    const handler =
-      config.handler ?? config.assetProps.handler ?? "index.handler";
+    const handler = config.handler ?? "index.handler";
     const runtime = config.runtime
-      ? new lambda.Runtime(config.runtime, lambda.RuntimeFamily.PYTHON)
-      : config.assetProps.runtime ?? lambda.Runtime.PYTHON_3_8;
+      ? new Runtime(config.runtime, RuntimeFamily.PYTHON)
+      : Runtime.PYTHON_3_8;
 
-    const assetData = generateLambdaAssetForTerraform(
+    super(
       scope,
-      `${id}Asset`,
-      LambdaPythonFunction,
-      {
-        ...config.assetProps,
+      id,
+      { ...config, handler, runtime: runtime.name },
+      new LambdaFunction(getDummyStack(), id, {
         handler,
         runtime,
-        code: lambda.Code.fromAsset(config.assetProps.entry, {
+        code: Code.fromAsset(config.entry, {
           bundling: {
             image: runtime.bundlingImage,
             environment: {
@@ -152,29 +150,49 @@ export class PythonPoetryFunction extends aws.lambdafunction.LambdaFunction {
             user: "root",
           },
         }),
-      }
+      })
     );
-
-    const s3Object = config.s3Bucket
-      ? new aws.s3.S3Object(scope, `${id}Archive`, {
-          bucket: config.s3Bucket,
-          key: `${
-            assetData.asset.assetHash
-          }-${assetData.asset.fileName.toLowerCase()}`,
-          source: assetData.asset.path, // returns a posix path
-        })
-      : undefined;
-
-    super(scope, id, {
-      ...config,
-      s3Bucket: s3Object?.bucket,
-      s3Key: s3Object?.key,
-      filename: !s3Object?.key ? assetData.filename : undefined,
-      sourceCodeHash: assetData.sourceCodeHash,
-      handler,
-      runtime: runtime.name,
-    });
   }
 }
 
-export const Runtime = lambda.Runtime;
+export class LayerVersion extends BaseAdapterLayerVersion {
+  constructor(scope: Construct, id: string, config: LambdaLayerVersionProps) {
+    super(
+      scope,
+      id,
+      {
+        layerName: config.layerVersionName ?? `${id}Layer`,
+        compatibleArchitectures: config.compatibleArchitectures?.map(
+          (architecture) => architecture.name
+        ),
+        compatibleRuntimes: config.compatibleRuntimes?.map(
+          (runtime) => runtime.name
+        ),
+      },
+      new LambdaLayerVersion(getDummyStack(), id, config)
+    );
+  }
+}
+
+export class PythonLayerVersion extends BaseAdapterLayerVersion {
+  constructor(
+    scope: Construct,
+    id: string,
+    config: LambdaPythonLayerVersionProps
+  ) {
+    super(
+      scope,
+      id,
+      {
+        layerName: config.layerVersionName ?? `${id}PythonLayer`,
+        compatibleArchitectures: config.compatibleArchitectures?.map(
+          (architecture) => architecture.name
+        ),
+        compatibleRuntimes: config.compatibleRuntimes?.map(
+          (runtime) => runtime.name
+        ),
+      },
+      new LambdaPythonLayerVersion(getDummyStack(), id, config)
+    );
+  }
+}
