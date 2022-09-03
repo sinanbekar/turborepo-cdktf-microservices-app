@@ -18,6 +18,7 @@ def handle_message(message: Any | Message) -> dict[str, bool]:
     csv_buffer = bytes(message_data['csvBuffer']['data'])
     csv_file = tempfile.NamedTemporaryFile(suffix='.csv')
     csv_file.write(csv_buffer)
+    csv_file.seek(0)
 
     pdf_buffer = None
     pdf_file = tempfile.NamedTemporaryFile(suffix=".pdf")
@@ -25,6 +26,7 @@ def handle_message(message: Any | Message) -> dict[str, bool]:
     is_success = False
     try:
         csv2pdf.convert(csv_file.name, pdf_file.name)
+        pdf_file.seek(0)
         is_success = os.stat(pdf_file.name).st_size != 0
     except Exception:
         logging.exception('CsvToPdf')
